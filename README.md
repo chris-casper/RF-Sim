@@ -10,8 +10,7 @@ Designed for Ubuntu, Debian or Armbian. You should be able to easily port to oth
 sudo chmod +x gensite.sh
 dos2unix gensite.sh
 ./gensite.sh
-``
-
+```
 
 
 **Installation Options**
