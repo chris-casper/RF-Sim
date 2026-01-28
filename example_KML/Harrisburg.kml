@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Harrisburg</name>
+    <description>RF Coverage Map</description>
+    
+    <!-- Coverage Overlay -->
+    <GroundOverlay>
+      <name>Harrisburg Coverage</name>
+      <description>
+        Frequency: 906.875 MHz
+        ERP: 3.97 W
+        TX Height: 10 m
+        Radius: 100 km
+        Threshold: -120 dBm
+        Model: 1
+        Resolution: 1200 ppd
+      </description>
+      <Icon>
+        <href>Harrisburg.png</href>
+      </Icon>
+      <LatLonBox>
+        <north>41.162755</north>
+        <south>39.366133</south>
+        <east>-75.706378</east>
+        <west>-78.060844</west>
+      </LatLonBox>
+    </GroundOverlay>
+    
+    <!-- Transmitter Location Marker -->
+    <Placemark>
+      <name>Harrisburg TX</name>
+      <description>
+        Transmitter Location
+        Lat: 40.264444
+        Lon: -76.883611
+        Height: 10 m AGL
+        Frequency: 906.875 MHz
+        ERP: 3.97 W
+      </description>
+      <Style>
+        <IconStyle>
+          <Icon>
+            <href>http://maps.google.com/mapfiles/kml/shapes/target.png</href>
+          </Icon>
+        </IconStyle>
+      </Style>
+      <Point>
+        <coordinates>-76.883611,40.264444,0</coordinates>
+      </Point>
+    </Placemark>
+    
+  </Document>
+</kml>

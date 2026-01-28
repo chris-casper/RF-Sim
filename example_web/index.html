@@ -1,0 +1,1047 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Susquehanna Valley Mesh</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { width: 100%; height: 100%; }
+
+    /* Buttons styled like Leaflet controls */
+    .leaflet-bar button.theme-toggle,
+    .leaflet-bar button.terrain-tool {
+      width: 34px;
+      height: 34px;
+      background: #fff;
+      border: none;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 34px;
+      text-align: center;
+    }
+    .leaflet-bar button.theme-toggle:hover,
+    .leaflet-bar button.terrain-tool:hover { background: #f0f0f0; }
+
+    /* Terrain readout */
+    .terrain-readout {
+      background: rgba(255,255,255,0.92);
+      padding: 8px 10px;
+      border-radius: 8px;
+      font: 12px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+      max-width: 320px;
+    }
+    .terrain-readout b { font-weight: 700; }
+    .terrain-readout .muted { opacity: 0.8; }
+    .terrain-readout .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .terrain-readout .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.06);
+      margin-right: 6px;
+      white-space: nowrap;
+    }
+    .terrain-readout svg {
+      width: 100%;
+      height: 120px;
+      display: block;
+      margin-top: 8px;
+      background: rgba(0,0,0,0.03);
+      border-radius: 8px;
+    }
+    .terrain-readout .legend {
+      margin-top: 6px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-size: 11px;
+      opacity: 0.9;
+    }
+    .terrain-readout .legend span::before {
+      content: "";
+      display: inline-block;
+      width: 10px;
+      height: 2px;
+      margin-right: 6px;
+      vertical-align: middle;
+      background: currentColor;
+    }
+    .terrain-readout .legend .terr { color: #374151; }
+    .terrain-readout .legend .los  { color: #2563eb; }
+    .terrain-readout .legend .req  { color: #b45309; }
+    .terrain-readout .legend .worst{ color: #dc2626; }
+
+    /* ===== Layers control polish (All + search + headers) ===== */
+    .leaflet-control-layers .svmesh-overlay-tools {
+      padding: 6px 8px 2px 8px;
+      border-bottom: 1px solid rgba(0,0,0,0.15);
+      margin-bottom: 6px;
+    }
+    .svmesh-overlay-tools .svmesh-all {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+      font-weight: 700;
+    }
+    .svmesh-overlay-tools input[type="text"]{
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(0,0,0,0.2);
+      outline: none;
+      font-size: 12px;
+      background: rgba(255,255,255,0.9);
+    }
+    .svmesh-overlay-tools input[type="text"]:focus{
+      border-color: rgba(59,130,246,0.8);
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+    }
+
+    .svmesh-group-title{
+      padding: 6px 8px 4px 8px;
+      font-weight: 800;
+      font-size: 12px;
+      opacity: 0.85;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .svmesh-overlay-item{
+      padding: 2px 8px;
+    }
+    .svmesh-overlay-item label{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .svmesh-overlay-item input[type="checkbox"]{
+      cursor: pointer;
+    }
+    .svmesh-overlay-item .name{
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .svmesh-hidden{ display:none !important; }
+  </style>
+</head>
+
+<body>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+  // ----------------------------
+  // Map init
+  // ----------------------------
+  const paBounds = L.latLngBounds([39.7190, -80.5250], [42.2650, -74.7050]);
+
+  const lightLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "© OpenStreetMap contributors"
+  });
+
+  const darkLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    maxZoom: 19,
+    attribution: "© OpenStreetMap contributors © CARTO"
+  });
+
+  const openTopoLayer = L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+    maxZoom: 17,
+    subdomains: ["a","b","c"],
+    attribution: "map data: © OpenStreetMap contributors, SRTM | map style: © OpenTopoMap (CC-BY-SA)"
+  });
+
+  const map = L.map("map");
+  map.fitBounds(paBounds);
+
+  // Theme helpers
+  function getSavedTheme() { return localStorage.getItem("mapTheme"); } // "dark"|"light"|null
+  function setTheme(theme) {
+    map.removeLayer(lightLayer);
+    map.removeLayer(darkLayer);
+    map.removeLayer(openTopoLayer); // avoid stacking if user selected topo
+
+    if (theme === "dark") darkLayer.addTo(map);
+    else lightLayer.addTo(map);
+
+    localStorage.setItem("mapTheme", theme);
+  }
+  const savedTheme = getSavedTheme();
+  setTheme(savedTheme === "light" ? "light" : "dark");
+
+  // Base layer control
+  const baseMaps = {
+    "OpenStreetMap": lightLayer,
+    "Dark": darkLayer,
+    "OpenTopoMap": openTopoLayer
+  };
+  const layerControl = L.control.layers(baseMaps, {}, { collapsed: true }).addTo(map);
+
+  // Dark/light toggle button
+  const ThemeToggle = L.Control.extend({
+    options: { position: "topright" },
+    onAdd: function () {
+      const btn = L.DomUtil.create("button", "theme-toggle leaflet-bar");
+      const refreshIcon = () => {
+        const t = getSavedTheme() === "dark" ? "dark" : "light";
+        btn.textContent = (t === "dark") ? "🌞" : "🌙";
+        btn.title = (t === "dark") ? "Switch to light mode" : "Switch to dark mode";
+      };
+      refreshIcon();
+      L.DomEvent.disableClickPropagation(btn);
+      btn.addEventListener("click", () => {
+        const t = getSavedTheme() === "dark" ? "dark" : "light";
+        setTheme(t === "dark" ? "light" : "dark");
+        refreshIcon();
+      });
+      return btn;
+    }
+  });
+  map.addControl(new ThemeToggle());
+
+  // ----------------------------
+  // Overlay registry + polish UI (All + search + headers + alphabetical + persistence)
+  // ----------------------------
+  const OVERLAY_STATE_KEY = "svmeshOverlayStates_v1";
+
+  /** name -> { layer, group } */
+  const overlayRegistry = new Map();
+
+  function loadOverlayStateMap() {
+    try {
+      const raw = localStorage.getItem(OVERLAY_STATE_KEY);
+      if (!raw) return {};
+      const obj = JSON.parse(raw);
+      return (obj && typeof obj === "object") ? obj : {};
+    } catch {
+      return {};
+    }
+  }
+  function saveOverlayStateMap(obj) {
+    try { localStorage.setItem(OVERLAY_STATE_KEY, JSON.stringify(obj)); } catch {}
+  }
+  function getOverlayEnabled(name, defaultOn = true) {
+    const st = loadOverlayStateMap();
+    if (Object.prototype.hasOwnProperty.call(st, name)) return !!st[name];
+    return defaultOn;
+  }
+  function setOverlayEnabled(name, enabled) {
+    const st = loadOverlayStateMap();
+    st[name] = !!enabled;
+    saveOverlayStateMap(st);
+  }
+
+  function registerOverlay(name, layer, group = "Other", defaultOn = true) {
+    overlayRegistry.set(name, { layer, group });
+
+    // Apply persisted state now
+    const wantOn = getOverlayEnabled(name, defaultOn);
+    if (wantOn) map.addLayer(layer);
+    else map.removeLayer(layer);
+
+    rebuildOverlayUI();
+  }
+
+  function overlayGroupOrderKey(group) {
+    // Ordered headers
+    // You can tweak this order if you want.
+    const g = (group || "Other").toLowerCase();
+    if (g === "prod") return 2;
+    if (g === "potential") return 1;
+    return 0; // Other
+  }
+
+  function normalizeText(s) {
+    return String(s || "").toLowerCase();
+  }
+
+  function rebuildOverlayUI() {
+    const container = layerControl.getContainer();
+    if (!container) return;
+
+    const overlaysList = container.querySelector(".leaflet-control-layers-overlays");
+    if (!overlaysList) return;
+
+    // Build once, then rebuild list content
+    overlaysList.innerHTML = "";
+
+    // Tools wrapper (All + search)
+    const tools = document.createElement("div");
+    tools.className = "svmesh-overlay-tools";
+
+    const allRow = document.createElement("div");
+    allRow.className = "svmesh-all";
+
+    const allCb = document.createElement("input");
+    allCb.type = "checkbox";
+    allCb.id = "svmesh-all-toggle";
+
+    const allLbl = document.createElement("label");
+    allLbl.htmlFor = "svmesh-all-toggle";
+    allLbl.textContent = "All";
+
+    allRow.appendChild(allCb);
+    allRow.appendChild(allLbl);
+
+    const search = document.createElement("input");
+    search.type = "text";
+    search.placeholder = "Filter overlays…";
+
+    tools.appendChild(allRow);
+    tools.appendChild(search);
+    overlaysList.appendChild(tools);
+
+    L.DomEvent.disableClickPropagation(tools);
+    L.DomEvent.disableScrollPropagation(tools);
+
+    // Group overlays: group -> [names...]
+    const groupMap = new Map();
+    for (const [name, { group }] of overlayRegistry.entries()) {
+      const g = group || "Other";
+      if (!groupMap.has(g)) groupMap.set(g, []);
+      groupMap.get(g).push(name);
+    }
+
+    // Sort group names by preferred order then alpha
+    const groups = Array.from(groupMap.keys()).sort((a, b) => {
+      const ka = overlayGroupOrderKey(a);
+      const kb = overlayGroupOrderKey(b);
+      if (ka !== kb) return ka - kb;
+      return a.localeCompare(b, undefined, { sensitivity: "base" });
+    });
+
+    // Build group sections, overlay names sorted alphabetically within group
+    const overlayItemEls = []; // for filtering
+    for (const g of groups) {
+      const names = groupMap.get(g).slice().sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: "base" })
+      );
+
+      const header = document.createElement("div");
+      header.className = "svmesh-group-title";
+      header.textContent = g;
+      overlaysList.appendChild(header);
+
+      const itemsForThisHeader = [];
+
+      for (const name of names) {
+        const entry = overlayRegistry.get(name);
+        if (!entry) continue;
+
+        const item = document.createElement("div");
+        item.className = "svmesh-overlay-item";
+
+        const label = document.createElement("label");
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = map.hasLayer(entry.layer);
+        cb.dataset.overlayName = name;
+
+        const span = document.createElement("span");
+        span.className = "name";
+        span.textContent = name;
+
+        label.appendChild(cb);
+        label.appendChild(span);
+        item.appendChild(label);
+        overlaysList.appendChild(item);
+
+        // Click behavior
+        cb.addEventListener("change", () => {
+          const on = cb.checked;
+          if (on) map.addLayer(entry.layer);
+          else map.removeLayer(entry.layer);
+          setOverlayEnabled(name, on);
+          updateAllCheckboxState();
+        });
+
+        // Prevent map drag when clicking
+        L.DomEvent.disableClickPropagation(item);
+        L.DomEvent.disableScrollPropagation(item);
+
+        overlayItemEls.push({ header, item, name, cb });
+        itemsForThisHeader.push(item);
+      }
+
+      // Store header linkage for filtering
+      header._svmeshItems = itemsForThisHeader;
+    }
+
+    function updateAllCheckboxState() {
+      const entries = Array.from(overlayRegistry.values());
+      const total = entries.length;
+      const enabled = entries.filter(e => map.hasLayer(e.layer)).length;
+
+      allCb.checked = (total > 0 && enabled === total);
+      allCb.indeterminate = (enabled > 0 && enabled < total);
+    }
+
+    allCb.addEventListener("change", () => {
+      const enable = allCb.checked;
+      for (const [name, { layer }] of overlayRegistry.entries()) {
+        if (enable) map.addLayer(layer);
+        else map.removeLayer(layer);
+        setOverlayEnabled(name, enable);
+      }
+      updateAllCheckboxState();
+
+      // Update visible checkboxes
+      overlaysList.querySelectorAll('input[type="checkbox"][data-overlay-name]').forEach(cb => {
+        cb.checked = enable;
+      });
+    });
+
+    // Filtering
+    function applyFilter() {
+      const q = normalizeText(search.value);
+
+      // Show/hide overlay items based on text match
+      const perHeaderVisibleCount = new Map();
+
+      for (const obj of overlayItemEls) {
+        const match = !q || normalizeText(obj.name).includes(q);
+        obj.item.classList.toggle("svmesh-hidden", !match);
+
+        // count visible items by header
+        if (match) {
+          perHeaderVisibleCount.set(obj.header, (perHeaderVisibleCount.get(obj.header) || 0) + 1);
+        }
+      }
+
+      // Hide headers that have no visible items
+      const headers = overlaysList.querySelectorAll(".svmesh-group-title");
+      headers.forEach(h => {
+        const vis = perHeaderVisibleCount.get(h) || 0;
+        h.classList.toggle("svmesh-hidden", vis === 0);
+      });
+    }
+
+    search.addEventListener("input", applyFilter);
+
+    // Initial state sync
+    updateAllCheckboxState();
+
+    // Keep checkboxes synced if layers are toggled elsewhere
+    map.off("overlayadd", onOverlaySync);
+    map.off("overlayremove", onOverlaySync);
+    map.on("overlayadd", onOverlaySync);
+    map.on("overlayremove", onOverlaySync);
+
+    function onOverlaySync() {
+      // Update individual checkboxes
+      overlaysList.querySelectorAll('input[type="checkbox"][data-overlay-name]').forEach(cb => {
+        const name = cb.dataset.overlayName;
+        const entry = overlayRegistry.get(name);
+        if (!entry) return;
+        cb.checked = map.hasLayer(entry.layer);
+      });
+      // Update "All"
+      updateAllCheckboxState();
+    }
+
+    applyFilter();
+  }
+
+  // Ensure UI exists even before overlays are registered
+  rebuildOverlayUI();
+
+  // ----------------------------
+  // PA Counties (original blue lines)
+  // ----------------------------
+  (async () => {
+    const countiesData = await fetch("assets/pa_counties.geojson", { cache: "no-store" }).then(r => r.json());
+
+    function countyStyle() { return { color: "#3b82f6", weight: 1.5, opacity: 0.7, fillOpacity: 0 }; }
+    function highlightFeature(e) {
+      const layer = e.target;
+      layer.setStyle({ weight: 3, opacity: 1 });
+      layer.bringToFront();
+    }
+
+    function onEachCounty(feature, layer) {
+      const name =
+        feature.properties?.NAME ||
+        feature.properties?.NAMELSAD ||
+        feature.properties?.name ||
+        "Unknown County";
+
+      layer.bindPopup(`<b>${name}</b>`);
+      layer.bindTooltip(name, { sticky: true });
+      layer.on({ mouseover: highlightFeature, mouseout: () => countyLayer.resetStyle(layer) });
+    }
+
+    const countyLayer = L.geoJSON(countiesData, { style: countyStyle, onEachFeature: onEachCounty });
+
+    // Register (default ON)
+    registerOverlay("County Lines", countyLayer, "Other", true);
+
+  })().catch(err => console.error("County load failed:", err));
+
+  // ----------------------------
+  // Marker icons
+  // ----------------------------
+  const greenIcon = new L.Icon({
+    iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png",
+    shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowSize: [41, 41]
+  });
+
+  const redIcon = new L.Icon({
+    iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
+    shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowSize: [41, 41]
+  });
+  const purpleIcon = new L.Icon({
+    iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-violet.png",
+    shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowSize: [41, 41]
+  });  
+
+  // ----------------------------
+  // ===== MAPBOX TERRAIN + LOS + FRESNEL TOOLING =====
+  // ----------------------------
+
+ // Put your token here: 
+ const MAPBOX_TOKEN = "CHANGE_API_KEY_HERE";
+
+  // Sampling controls:
+  const TERRAIN_ZOOM = 13;
+  const SAMPLE_METERS = 90;
+
+  // RF defaults (change with ⚙️)
+  const rfSettings = {
+    freqMHz: 915,
+    aAglM: 15,
+    bAglM: 15,
+    fresnelClearPct: 0.60,
+    kFactor: 4/3
+  };
+
+  const C = 299792458;
+  const R_EARTH = 6371000;
+
+  function metersToFeet(m) { return m * 3.28084; }
+  function mToMi(m) { return m / 1609.344; }
+
+  function terrainTileUrl(z, x, y) {
+    return `https://api.mapbox.com/v4/mapbox.terrain-rgb/${z}/${x}/${y}.pngraw?access_token=${MAPBOX_TOKEN}`;
+  }
+  function decodeTerrainRgb(r, g, b) {
+    return -10000 + ((r * 256 * 256 + g * 256 + b) * 0.1);
+  }
+
+  const TerrainReadout = L.Control.extend({
+    options: { position: "bottomleft" },
+    onAdd: function() {
+      const div = L.DomUtil.create("div", "terrain-readout");
+      div.innerHTML =
+        `<b>Terrain + LOS</b><br>` +
+        `<span class="muted">Shift-Click A then B, or click two tower markers.</span><br>` +
+        `<span class="muted">Click 📈 to clear, ⚙️ to set frequency/heights.</span>`;
+      L.DomEvent.disableClickPropagation(div);
+      this._div = div;
+      return div;
+    },
+    set: function(html) { this._div.innerHTML = html; }
+  });
+  const terrainReadout = new TerrainReadout();
+  map.addControl(terrainReadout);
+
+  const TerrainTool = L.Control.extend({
+    options: { position: "topright" },
+    onAdd: function () {
+      const wrap = L.DomUtil.create("div", "leaflet-bar");
+      wrap.style.display = "flex";
+      wrap.style.gap = "6px";
+      wrap.style.background = "transparent";
+
+      const btnClear = L.DomUtil.create("button", "terrain-tool", wrap);
+      btnClear.textContent = "📈";
+      btnClear.title = "Terrain/LOS tool. Shift-Click A then B (or click tower markers). Click to clear.";
+
+      const btnCfg = L.DomUtil.create("button", "terrain-tool", wrap);
+      btnCfg.textContent = "⚙️";
+      btnCfg.title = "Configure RF settings.";
+
+      L.DomEvent.disableClickPropagation(wrap);
+
+      btnClear.addEventListener("click", () => {
+        clearTerrainSelection();
+        terrainReadout.set(
+          `<b>Terrain + LOS</b><br>` +
+          `<span class="muted">Cleared.</span> Shift-Click A then B, or click two tower markers.`
+        );
+      });
+
+      btnCfg.addEventListener("click", () => {
+        const f = prompt("Frequency MHz (e.g., 915):", String(rfSettings.freqMHz));
+        const a = prompt("A antenna height AGL (meters):", String(rfSettings.aAglM));
+        const b = prompt("B antenna height AGL (meters):", String(rfSettings.bAglM));
+        const p = prompt("Fresnel clearance fraction (0.60 = 60%):", String(rfSettings.fresnelClearPct));
+        const k = prompt("k-factor (4/3 typical; 0 disables curvature):", String(rfSettings.kFactor));
+
+        if (f !== null && f.trim() !== "" && !Number.isNaN(Number(f))) rfSettings.freqMHz = Number(f);
+        if (a !== null && a.trim() !== "" && !Number.isNaN(Number(a))) rfSettings.aAglM = Number(a);
+        if (b !== null && b.trim() !== "" && !Number.isNaN(Number(b))) rfSettings.bAglM = Number(b);
+        if (p !== null && p.trim() !== "" && !Number.isNaN(Number(p))) rfSettings.fresnelClearPct = Number(p);
+        if (k !== null && k.trim() !== "" && !Number.isNaN(Number(k))) rfSettings.kFactor = Number(k);
+
+        terrainReadout.set(
+          `<b>Terrain + LOS</b><br>` +
+          `<span class="pill">Freq: <b>${rfSettings.freqMHz} MHz</b></span>` +
+          `<span class="pill">A AGL: <b>${rfSettings.aAglM} m</b></span>` +
+          `<span class="pill">B AGL: <b>${rfSettings.bAglM} m</b></span><br>` +
+          `<span class="pill">Fresnel: <b>${Math.round(rfSettings.fresnelClearPct * 100)}%</b></span>` +
+          `<span class="pill">k: <b>${rfSettings.kFactor}</b></span><br>` +
+          `<span class="muted">Shift-Click A then B, or click two tower markers.</span>`
+        );
+      });
+
+      return wrap;
+    }
+  });
+  map.addControl(new TerrainTool());
+
+  let terrainA = null, terrainB = null;
+  let terrainMarkerA = null, terrainMarkerB = null;
+  let terrainLine = null;
+  let worstMarker = null;
+
+  function clearTerrainSelection() {
+    terrainA = terrainB = null;
+    if (terrainMarkerA) { map.removeLayer(terrainMarkerA); terrainMarkerA = null; }
+    if (terrainMarkerB) { map.removeLayer(terrainMarkerB); terrainMarkerB = null; }
+    if (terrainLine) { map.removeLayer(terrainLine); terrainLine = null; }
+    if (worstMarker) { map.removeLayer(worstMarker); worstMarker = null; }
+  }
+  function setPointA(latlng, label = "A") {
+    terrainA = latlng;
+    if (terrainMarkerA) map.removeLayer(terrainMarkerA);
+    terrainMarkerA = L.circleMarker(terrainA, { radius: 7, weight: 2, fillOpacity: 0.8 }).addTo(map)
+      .bindTooltip(label, { permanent: true, direction: "top" });
+  }
+  function setPointB(latlng, label = "B") {
+    terrainB = latlng;
+    if (terrainMarkerB) map.removeLayer(terrainMarkerB);
+    terrainMarkerB = L.circleMarker(terrainB, { radius: 7, weight: 2, fillOpacity: 0.8 }).addTo(map)
+      .bindTooltip(label, { permanent: true, direction: "top" });
+  }
+  function drawLine() {
+    if (terrainLine) map.removeLayer(terrainLine);
+    terrainLine = L.polyline([terrainA, terrainB], { weight: 3, opacity: 0.9 }).addTo(map);
+  }
+
+  // Tile cache
+  const tileCache = new Map();
+
+  function lngLatToTilePixel(lat, lon, z) {
+    const latRad = lat * Math.PI / 180;
+    const n = Math.pow(2, z);
+
+    const xFloat = (lon + 180) / 360 * n;
+    const yFloat = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n;
+
+    const x = Math.floor(xFloat);
+    const y = Math.floor(yFloat);
+    const px = Math.floor((xFloat - x) * 256);
+    const py = Math.floor((yFloat - y) * 256);
+    return { x, y, px, py };
+  }
+
+  async function getTileImageData(z, x, y) {
+    const key = `${z}/${x}/${y}`;
+    if (tileCache.has(key)) return tileCache.get(key);
+
+    const url = terrainTileUrl(z, x, y);
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.crossOrigin = "anonymous";
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = url;
+    });
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 256;
+
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    const imageData = ctx.getImageData(0, 0, 256, 256);
+
+    tileCache.set(key, imageData);
+    return imageData;
+  }
+
+  async function getElevationAt(lat, lon) {
+    const { x, y, px, py } = lngLatToTilePixel(lat, lon, TERRAIN_ZOOM);
+    const id = await getTileImageData(TERRAIN_ZOOM, x, y);
+
+    const idx = (py * 256 + px) * 4;
+    const r = id.data[idx + 0];
+    const g = id.data[idx + 1];
+    const b = id.data[idx + 2];
+
+    return decodeTerrainRgb(r, g, b);
+  }
+
+  function sampleAlongLine(a, b, spacingMeters) {
+    const dist = a.distanceTo(b);
+    const steps = Math.max(2, Math.ceil(dist / spacingMeters) + 1);
+    const pts = [];
+    for (let i = 0; i < steps; i++) {
+      const t = i / (steps - 1);
+      const lat = a.lat + (b.lat - a.lat) * t;
+      const lng = a.lng + (b.lng - a.lng) * t;
+      pts.push(L.latLng(lat, lng));
+    }
+    return pts;
+  }
+
+  function makeProfileSvg(distM, terrM, losM, reqM, worstIdx) {
+    const W = 300, H = 120, padL = 26, padR = 8, padT = 10, padB = 18;
+    const innerW = W - padL - padR;
+    const innerH = H - padT - padB;
+
+    const all = terrM.concat(losM, reqM).filter(v => Number.isFinite(v));
+    let yMin = Math.min(...all);
+    let yMax = Math.max(...all);
+    if (!Number.isFinite(yMin) || !Number.isFinite(yMax) || yMin === yMax) { yMin -= 1; yMax += 1; }
+    const yPad = (yMax - yMin) * 0.08;
+    yMin -= yPad; yMax += yPad;
+
+    const dMax = Math.max(...distM, 1);
+    const xScale = (d) => padL + (d / dMax) * innerW;
+    const yScale = (v) => padT + (1 - (v - yMin) / (yMax - yMin)) * innerH;
+
+    const poly = (arr, color, width) => {
+      const pts = arr.map((v, i) => `${xScale(distM[i]).toFixed(2)},${yScale(v).toFixed(2)}`).join(" ");
+      return `<polyline fill="none" stroke="${color}" stroke-width="${width}" points="${pts}" />`;
+    };
+
+    const worstX = (worstIdx >= 0) ? xScale(distM[worstIdx]) : null;
+    const yMinLbl = `${yMin.toFixed(0)}m`;
+    const yMaxLbl = `${yMax.toFixed(0)}m`;
+    const miMax = mToMi(dMax).toFixed(1);
+
+    return `
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Elevation profile chart">
+        <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H - padB}" stroke="rgba(0,0,0,0.25)" stroke-width="1"/>
+        <line x1="${padL}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}" stroke="rgba(0,0,0,0.25)" stroke-width="1"/>
+        <text x="4" y="${padT + 10}" font-size="10" fill="rgba(0,0,0,0.65)">${yMaxLbl}</text>
+        <text x="4" y="${H - padB}" font-size="10" fill="rgba(0,0,0,0.65)">${yMinLbl}</text>
+        <text x="${W - padR - 34}" y="${H - 4}" font-size="10" fill="rgba(0,0,0,0.65)">${miMax} mi</text>
+
+        ${poly(terrM, "#374151", 2)}
+        ${poly(reqM,  "#b45309", 2)}
+        ${poly(losM,  "#2563eb", 2)}
+
+        ${worstX !== null ? `<line x1="${worstX}" y1="${padT}" x2="${worstX}" y2="${H - padB}" stroke="#dc2626" stroke-width="1" stroke-dasharray="3,3" />` : ""}
+      </svg>
+    `;
+  }
+
+  async function runTerrainAndRf(a, b) {
+    if (!MAPBOX_TOKEN || MAPBOX_TOKEN.startsWith("REPLACE_")) {
+      terrainReadout.set(`<b>Terrain + LOS</b><br><span style="color:#b91c1c">Set MAPBOX_TOKEN first.</span>`);
+      return;
+    }
+
+    terrainReadout.set(`<b>Terrain + LOS</b><br><span class="muted">Sampling terrain…</span>`);
+
+    const pts = sampleAlongLine(a, b, SAMPLE_METERS);
+
+    const elevations = [];
+    for (let i = 0; i < pts.length; i++) {
+      try {
+        elevations.push(await getElevationAt(pts[i].lat, pts[i].lng));
+      } catch (e) {
+        console.error("Terrain sample failed:", e);
+        terrainReadout.set(`<b>Terrain + LOS</b><br><span style="color:#b91c1c">Terrain sample failed.</span>`);
+        return;
+      }
+    }
+
+    const distTotal = a.distanceTo(b);
+    const distFromA = pts.map(p => a.distanceTo(p));
+
+    const aTip = elevations[0] + rfSettings.aAglM;
+    const bTip = elevations[elevations.length - 1] + rfSettings.bAglM;
+
+    const fHz = rfSettings.freqMHz * 1e6;
+    const lambda = C / fHz;
+
+    const useCurv = rfSettings.kFactor && rfSettings.kFactor > 0;
+    const Reff = useCurv ? (rfSettings.kFactor * R_EARTH) : Infinity;
+
+    let worstClear = Infinity, worstIdx = -1, worstType = "";
+    let blocked = false;
+
+    const losHeights = [];
+    const reqHeights = [];
+    const terrEff = [];
+    const clearances = [];
+
+    for (let i = 0; i < pts.length; i++) {
+      const x = distFromA[i];
+      const D = distTotal;
+      const t = (D === 0) ? 0 : (x / D);
+
+      const los = aTip + (bTip - aTip) * t;
+
+      const bulge = useCurv ? (x * (D - x)) / (2 * Reff) : 0;
+      const terr = elevations[i] + bulge;
+
+      const d1 = x, d2 = D - x;
+      const r1 = (D > 0) ? Math.sqrt(lambda * d1 * d2 / D) : 0;
+      const req = terr + (rfSettings.fresnelClearPct * r1);
+
+      const clearance = los - req;
+
+      losHeights.push(los);
+      reqHeights.push(req);
+      terrEff.push(terr);
+      clearances.push(clearance);
+
+      if (clearance < worstClear) { worstClear = clearance; worstIdx = i; worstType = "FRESNEL"; }
+      if (los - terr < 0) {
+        blocked = true;
+        if ((los - terr) < worstClear) { worstClear = (los - terr); worstIdx = i; worstType = "LOS"; }
+      }
+      if (clearance < 0) blocked = true;
+    }
+
+    if (worstMarker) { map.removeLayer(worstMarker); worstMarker = null; }
+    if (worstIdx >= 0) {
+      const wp = pts[worstIdx];
+      worstMarker = L.circleMarker(wp, {
+        radius: 8, weight: 2, color: "#dc2626",
+        fillColor: "#fca5a5", fillOpacity: 0.85
+      }).addTo(map);
+
+      const worstMi = mToMi(distFromA[worstIdx]).toFixed(2);
+      worstMarker.bindTooltip(
+        `Worst @ ${worstMi} mi<br>Clearance: ${worstClear.toFixed(2)} m (${metersToFeet(worstClear).toFixed(1)} ft)`,
+        { direction: "top", sticky: true }
+      );
+    }
+
+    const miles = mToMi(distTotal).toFixed(2);
+    const worstMi = (worstIdx >= 0) ? mToMi(distFromA[worstIdx]).toFixed(2) : "?";
+    const worstClearFt = metersToFeet(worstClear).toFixed(1);
+    const worstClearM = worstClear.toFixed(2);
+
+    const status = blocked ? "🚫 <b>BLOCKED</b>" : "✅ <b>CLEAR</b>";
+    const which = (worstType === "LOS")
+      ? "LOS (terrain hits line)"
+      : `${Math.round(rfSettings.fresnelClearPct * 100)}% Fresnel`;
+
+    const chartSvg = makeProfileSvg(distFromA, terrEff, losHeights, reqHeights, worstIdx);
+
+    terrainReadout.set(
+      `<b>Terrain + LOS</b><br>` +
+      `${status}<br>` +
+      `<div class="row" style="margin-top:6px">` +
+        `<span class="pill">Dist: <b>${miles} mi</b></span>` +
+        `<span class="pill">Freq: <b>${rfSettings.freqMHz} MHz</b></span>` +
+        `<span class="pill">k: <b>${rfSettings.kFactor}</b></span>` +
+      `</div>` +
+      `<div class="row">` +
+        `<span class="pill">A AGL: <b>${rfSettings.aAglM} m</b></span>` +
+        `<span class="pill">B AGL: <b>${rfSettings.bAglM} m</b></span>` +
+      `</div>` +
+      `Worst (${which}): <b>${worstClearM} m</b> (<b>${worstClearFt} ft</b>)<br>` +
+      `Where: ~<b>${worstMi} mi</b> from A` +
+      chartSvg +
+      `<div class="legend">` +
+        `<span class="terr">Terrain</span>` +
+        `<span class="req">Terrain + Fresnel</span>` +
+        `<span class="los">LOS</span>` +
+        `<span class="worst">Worst</span>` +
+      `</div>` +
+      `<div class="muted">Tip: Shift-Click again to reset, or click 📈 to clear.</div>`
+    );
+
+    // Debug arrays
+    console.log("Profile points:", pts);
+    console.log("Terrain (m):", elevations);
+    console.log("Effective terrain (m):", terrEff);
+    console.log("LOS (m):", losHeights);
+    console.log("Required clear height (m):", reqHeights);
+    console.log("Clearance (m):", clearances);
+  }
+
+  // Shift-click to set A then B anywhere
+  map.on("click", async (e) => {
+    if (!e.originalEvent.shiftKey) return;
+
+    if (!terrainA) {
+      clearTerrainSelection();
+      setPointA(e.latlng, "A");
+      terrainReadout.set(`<b>Terrain + LOS</b><br>Point A set. Shift-Click point B…`);
+      return;
+    }
+    if (!terrainB) {
+      setPointB(e.latlng, "B");
+      drawLine();
+      await runTerrainAndRf(terrainA, terrainB);
+      return;
+    }
+    clearTerrainSelection();
+    terrainReadout.set(`<b>Terrain + LOS</b><br><span class="muted">Cleared.</span> Shift-Click A then B, or click two tower markers.`);
+  });
+
+  // ----------------------------
+  // Tower marker integration: click two tower markers to set A/B + auto AGL
+  // ----------------------------
+  function guessAglMetersFromManifest(m) {
+    const s = m?.site || {};
+    const candidatesM = [
+      s.antenna_agl_m, s.antenna_height_m, s.height_agl_m, s.agl_m,
+      s.tower_height_m, s.tower_m, s.height_m
+    ];
+    for (const v of candidatesM) {
+      if (typeof v === "number" && isFinite(v) && v > 0) return v;
+      if (typeof v === "string" && v.trim() !== "" && isFinite(Number(v))) {
+        const n = Number(v); if (n > 0) return n;
+      }
+    }
+    const candidatesFt = [
+      s.antenna_agl_ft, s.antenna_height_ft, s.height_agl_ft, s.agl_ft,
+      s.tower_height_ft, s.tower_ft, s.height_ft
+    ];
+    for (const v of candidatesFt) {
+      if (typeof v === "number" && isFinite(v) && v > 0) return v / 3.28084;
+      if (typeof v === "string" && v.trim() !== "" && isFinite(Number(v))) {
+        const n = Number(v); if (n > 0) return n / 3.28084;
+      }
+    }
+    return null;
+  }
+
+  async function acceptTowerClickAsEndpoint(marker, meta) {
+    if (terrainA && terrainB) clearTerrainSelection();
+
+    const ll = marker.getLatLng();
+    const name = meta?.name || "Site";
+    const suggestedAgl = meta?.aglM ?? null;
+
+    const promptAgl = (which) => {
+      const cur = (which === "A") ? rfSettings.aAglM : rfSettings.bAglM;
+      const s = prompt(`${which} antenna height AGL (meters) for: ${name}`, String(suggestedAgl ?? cur));
+      if (s !== null && s.trim() !== "" && !Number.isNaN(Number(s))) return Number(s);
+      return null;
+    };
+
+    if (!terrainA) {
+      setPointA(ll, "A");
+      if (suggestedAgl !== null) rfSettings.aAglM = suggestedAgl;
+      else {
+        const v = promptAgl("A");
+        if (v !== null) rfSettings.aAglM = v;
+      }
+      terrainReadout.set(
+        `<b>Terrain + LOS</b><br>` +
+        `A set to <b>${name}</b>.<br>` +
+        `<span class="muted">Now Shift-Click B or click another tower marker.</span>`
+      );
+      return;
+    }
+
+    if (!terrainB) {
+      setPointB(ll, "B");
+      if (suggestedAgl !== null) rfSettings.bAglM = suggestedAgl;
+      else {
+        const v = promptAgl("B");
+        if (v !== null) rfSettings.bAglM = v;
+      }
+      drawLine();
+      await runTerrainAndRf(terrainA, terrainB);
+      return;
+    }
+  }
+
+  // ----------------------------
+  // Load a section: one toggle per site group (marker + overlays)
+  // ----------------------------
+  async function loadSection(sectionLabel, baseFolder, markerIcon) {
+    const indexUrl = `/${baseFolder}/index.json`;
+    let idx;
+
+    try {
+      idx = await fetch(indexUrl, { cache: "no-store" }).then(r => r.json());
+    } catch (e) {
+      console.error(`Failed to load ${indexUrl}`, e);
+      return;
+    }
+
+    for (const manifestPath of (idx.manifests || [])) {
+      const manifestUrl = "/" + String(manifestPath).replace(/^\//, "");
+
+      try {
+        const m = await fetch(manifestUrl, { cache: "no-store" }).then(r => r.json());
+
+        const siteName = m?.site?.name || manifestPath;
+        const lat = m?.site?.lat;
+        const lon = m?.site?.lon;
+
+        const siteGroup = L.layerGroup();
+
+        if (typeof lat === "number" && typeof lon === "number") {
+          const marker = L.marker([lat, lon], { icon: markerIcon })
+            .bindPopup(`<b>${siteName}</b><br><small>${sectionLabel}</small>`);
+
+          const aglM = guessAglMetersFromManifest(m);
+          marker._svmeshMeta = { name: siteName, section: sectionLabel, aglM };
+
+          marker.on("click", async () => {
+            await acceptTowerClickAsEndpoint(marker, marker._svmeshMeta);
+          });
+
+          marker.addTo(siteGroup);
+        } else {
+          console.warn("Missing lat/lon in manifest:", manifestUrl);
+        }
+
+        (m.overlays || []).forEach((o) => {
+          if (!o.download_ok || !o.image || !o.bounds) return;
+          const imgUrl = "/" + String(o.image).replace(/^\//, "");
+          L.imageOverlay(imgUrl, o.bounds, { opacity: 0.6 }).addTo(siteGroup);
+        });
+
+        // Register overlay with group header and default ON
+        const overlayName = `${sectionLabel}: ${siteName}`;
+        registerOverlay(overlayName, siteGroup, sectionLabel, true);
+
+      } catch (e) {
+        console.error(`Failed loading manifest: ${manifestUrl}`, e);
+      }
+    }
+  }
+
+  // Start
+  loadSection("Potential", "potential", redIcon);
+
+</script>
+</body>
+</html>

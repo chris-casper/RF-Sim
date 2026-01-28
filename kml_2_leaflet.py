@@ -3,10 +3,11 @@
 Batch-process all .kml files in a folder.
 
 For each KML:
-- Extract site name (CloudRF "nam" preferred)
-- Extract site lat/lon
-- Extract GroundOverlay image + bounds
-- Download overlay PNG(s) (handles 404s + other HTTP errors gracefully)
+- Extract site name from Document/n element or filename
+- Extract site lat/lon from Placemark
+- Extract TX Height from description
+- Extract GroundOverlay bounds
+- Overlay image shares the same name as the KML with .png extension
 - Emit Leaflet-friendly manifest.json
 - ALSO emit a top-level index.json listing manifest paths
 
@@ -31,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -42,10 +44,13 @@ import requests
 from requests.exceptions import RequestException, Timeout
 
 
-KML_NS = {"kml": "http://earth.google.com/kml/2.2"}
+# Support multiple KML namespaces
+KML_NAMESPACES = [
+    {"kml": "http://www.opengis.net/kml/2.2"},
+    {"kml": "http://earth.google.com/kml/2.2"},
+]
 
 # Target base folder for manifests/images in generated JSON paths
-# (Matches your example: "potential/<SiteName>/manifest.json")
 POTENTIAL_BASE = "potential"
 
 
@@ -53,20 +58,66 @@ def slugify(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", s.strip()) or "site"
 
 
-def extract_cloudrf_json(desc: str) -> Optional[Dict[str, Any]]:
+def find_element(root: ET.Element, xpath: str) -> Optional[ET.Element]:
+    """Try to find element using multiple namespaces, or without namespace."""
+    for ns in KML_NAMESPACES:
+        elem = root.find(xpath, ns)
+        if elem is not None:
+            return elem
+    # Try without namespace prefix
+    no_ns_xpath = xpath.replace("kml:", "")
+    elem = root.find(no_ns_xpath)
+    return elem
+
+
+def find_all_elements(root: ET.Element, xpath: str) -> List[ET.Element]:
+    """Try to find all elements using multiple namespaces, or without namespace."""
+    for ns in KML_NAMESPACES:
+        elems = root.findall(xpath, ns)
+        if elems:
+            return elems
+    # Try without namespace prefix
+    no_ns_xpath = xpath.replace("kml:", "")
+    return root.findall(no_ns_xpath)
+
+
+def find_text(root: ET.Element, xpath: str, default: str = "") -> str:
+    """Try to find text using multiple namespaces."""
+    for ns in KML_NAMESPACES:
+        text = root.findtext(xpath, namespaces=ns)
+        if text:
+            return text.strip()
+    # Try without namespace prefix
+    no_ns_xpath = xpath.replace("kml:", "")
+    text = root.findtext(no_ns_xpath)
+    return text.strip() if text else default
+
+
+def extract_tx_height(desc: str) -> Optional[float]:
     """
-    CloudRF embeds a JSON object inside <textarea> ... </textarea> in the HTML CDATA.
-    We pull that out and parse it. Returns None if not found/parseable.
+    Extract TX Height from description text.
+    Looks for patterns like "TX Height: 10 m" or "Height: 10 m AGL"
     """
     if not desc:
         return None
-    m = re.search(r"<textarea[^>]*>(\{.*?\})</textarea>", desc, re.S | re.I)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(1))
-    except json.JSONDecodeError:
-        return None
+    
+    # Try "TX Height: X m" pattern
+    m = re.search(r"TX Height:\s*([\d.]+)\s*m", desc, re.I)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            pass
+    
+    # Try "Height: X m" pattern
+    m = re.search(r"Height:\s*([\d.]+)\s*m", desc, re.I)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            pass
+    
+    return None
 
 
 def safe_filename_from_url(url: str, fallback: str) -> str:
@@ -86,8 +137,6 @@ def download(url: str, dest: Path, timeout_s: int = 120) -> DownloadResult:
     """
     Download url -> dest. Returns DownloadResult.
     Gracefully handles HTTP errors (including 404) and network errors.
-
-    NOTE: we do not raise on errors; we return status so the caller can continue.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -95,13 +144,11 @@ def download(url: str, dest: Path, timeout_s: int = 120) -> DownloadResult:
         with requests.get(url, stream=True, timeout=timeout_s) as r:
             status = r.status_code
 
-            # Explicit handling for 404 (and any other non-2xx)
             if status == 404:
                 return DownloadResult(ok=False, http_status=404, error="404 Not Found")
             if status < 200 or status >= 300:
                 return DownloadResult(ok=False, http_status=status, error=f"HTTP {status}")
 
-            # Stream to disk
             with open(dest, "wb") as f:
                 for chunk in r.iter_content(chunk_size=1024 * 128):
                     if chunk:
@@ -117,65 +164,163 @@ def download(url: str, dest: Path, timeout_s: int = 120) -> DownloadResult:
         return DownloadResult(ok=False, http_status=None, error=f"Filesystem error: {e}")
 
 
+def get_element_name(elem: ET.Element) -> Optional[str]:
+    """
+    Get name from element, checking both <name> and <n> tags.
+    """
+    # Check for <name> tag (with various namespaces)
+    name = find_text(elem, "kml:name")
+    if name:
+        return name
+    
+    # Check for <n> tag (non-standard but used in some KMLs)
+    n_elem = elem.find("n")
+    if n_elem is not None and n_elem.text:
+        return n_elem.text.strip()
+    
+    return None
+
+
 def parse_kml(path: Path) -> Dict[str, Any]:
     """
-    Parse a CloudRF-style KML and return:
-      site_name, lat, lon, overlays[]
+    Parse a KML and return:
+      site_name, lat, lon, antenna_agl_m, overlays[]
     overlays contains: name, href, bounds[[s,w],[n,e]]
     """
-    root = ET.fromstring(path.read_text(encoding="utf-8", errors="replace"))
+    content = path.read_text(encoding="utf-8", errors="replace")
+    root = ET.fromstring(content)
 
-    folder_name = None
-    folder = root.find(".//kml:Folder", KML_NS)
-    if folder is not None:
-        folder_name = folder.findtext("kml:name", default="", namespaces=KML_NS).strip() or None
+    # Get site name from Document/n or Document/name, or fallback to filename
+    doc = find_element(root, ".//kml:Document")
+    if doc is None:
+        # Try without namespace
+        doc = root.find(".//Document")
+    
+    site_name = None
+    if doc is not None:
+        site_name = get_element_name(doc)
+    
+    # Fallback to filename (without extension)
+    if not site_name:
+        site_name = path.stem
 
-    placemark = root.find(".//kml:Placemark", KML_NS)
+    # Find Placemark for coordinates
+    placemark = find_element(root, ".//kml:Placemark")
+    if placemark is None:
+        placemark = root.find(".//Placemark")
+    
     if placemark is None:
         raise RuntimeError("No <Placemark> found")
 
-    placemark_name = placemark.findtext("kml:name", default="", namespaces=KML_NS).strip() or None
-    desc = placemark.findtext("kml:description", default="", namespaces=KML_NS) or ""
+    placemark_name = get_element_name(placemark)
 
-    cloudrf = extract_cloudrf_json(desc) or {}
-    site_name = (cloudrf.get("nam") or placemark_name or folder_name or path.stem).strip()
-
-    coord = placemark.findtext(".//kml:Point/kml:coordinates", namespaces=KML_NS)
+    # Get coordinates
+    coord = find_text(placemark, ".//kml:Point/kml:coordinates")
+    if not coord:
+        point = placemark.find(".//Point")
+        if point is not None:
+            coord_elem = point.find("coordinates")
+            if coord_elem is not None and coord_elem.text:
+                coord = coord_elem.text.strip()
+    
     if not coord:
         raise RuntimeError("No <Point><coordinates> found for site lat/lon")
 
     lon, lat = map(float, coord.split(",")[:2])
 
+    # Extract TX Height from GroundOverlay description
+    antenna_agl_m = 10.0  # default
+    
+    ground_overlays = find_all_elements(root, ".//kml:GroundOverlay")
+    if not ground_overlays:
+        ground_overlays = root.findall(".//GroundOverlay")
+    
+    for go in ground_overlays:
+        desc = get_element_name(go)  # Check name first
+        desc_elem = go.find("description")
+        if desc_elem is not None and desc_elem.text:
+            desc = desc_elem.text
+        
+        height = extract_tx_height(desc if desc else "")
+        if height is not None:
+            antenna_agl_m = height
+            break
+
+    # Parse overlays - image name is KML filename with .png extension
     overlays: List[Dict[str, Any]] = []
-    for go in root.findall(".//kml:GroundOverlay", KML_NS):
-        href = go.findtext("kml:Icon/kml:href", namespaces=KML_NS)
-        box = go.find("kml:LatLonBox", KML_NS)
-        if not href or box is None:
+    png_filename = path.stem + ".png"
+    
+    for go in ground_overlays:
+        # Get bounds from LatLonBox
+        box = go.find("LatLonBox")
+        if box is None:
+            for ns in KML_NAMESPACES:
+                box = go.find("kml:LatLonBox", ns)
+                if box is not None:
+                    break
+        
+        if box is None:
             continue
 
-        def f(tag: str) -> float:
-            t = box.findtext(f"kml:{tag}", namespaces=KML_NS)
-            if t is None:
-                raise RuntimeError(f"Missing <LatLonBox><{tag}>")
-            return float(t)
+        def get_bound(tag: str) -> float:
+            # Try direct child
+            elem = box.find(tag)
+            if elem is not None and elem.text:
+                return float(elem.text.strip())
+            # Try with namespace
+            for ns in KML_NAMESPACES:
+                text = box.findtext(f"kml:{tag}", namespaces=ns)
+                if text:
+                    return float(text.strip())
+            raise RuntimeError(f"Missing <LatLonBox><{tag}>")
+
+        # Get href from Icon (may be relative path)
+        href = None
+        icon = go.find("Icon")
+        if icon is None:
+            for ns in KML_NAMESPACES:
+                icon = go.find("kml:Icon", ns)
+                if icon is not None:
+                    break
+        
+        if icon is not None:
+            href_elem = icon.find("href")
+            if href_elem is None:
+                for ns in KML_NAMESPACES:
+                    href_elem = icon.find("kml:href", ns)
+                    if href_elem is not None:
+                        break
+            if href_elem is not None and href_elem.text:
+                href = href_elem.text.strip()
+
+        # Get rotation if present
+        rotation = None
+        rot_elem = box.find("rotation")
+        if rot_elem is None:
+            for ns in KML_NAMESPACES:
+                rot_elem = box.find("kml:rotation", ns)
+                if rot_elem is not None:
+                    break
+        if rot_elem is not None and rot_elem.text:
+            rotation = float(rot_elem.text.strip())
 
         overlays.append({
-            "name": go.findtext("kml:name", default="Coverage", namespaces=KML_NS),
-            "href": href.strip(),
+            "name": site_name,
+            "href": href,
             "bounds": [
-                [f("south"), f("west")],
-                [f("north"), f("east")]
+                [get_bound("south"), get_bound("west")],
+                [get_bound("north"), get_bound("east")]
             ],
-            "rotation": (lambda x: float(x) if x is not None else None)(
-                box.findtext("kml:rotation", namespaces=KML_NS)
-            )
+            "rotation": rotation,
+            "png_filename": png_filename
         })
 
     return {
         "site_name": site_name,
         "lat": lat,
         "lon": lon,
-        "folder_name": folder_name,
+        "antenna_agl_m": antenna_agl_m,
+        "folder_name": site_name,
         "placemark_name": placemark_name,
         "overlays": overlays
     }
@@ -223,12 +368,10 @@ def main() -> int:
         for idx, ov in enumerate(info["overlays"], start=1):
             href = ov.get("href")
             bounds = ov.get("bounds")
-
-            # CHANGE: overlays.name should be the site.name
-            ov_name = site_name
+            png_filename = ov.get("png_filename")
 
             entry: Dict[str, Any] = {
-                "name": ov_name,
+                "name": site_name,
                 "source_url": href,
                 "bounds": bounds,
                 "rotation": ov.get("rotation"),
@@ -238,46 +381,79 @@ def main() -> int:
                 "error": None
             }
 
+            # Image path uses the PNG filename derived from KML name
+            image_rel = f"/{POTENTIAL_BASE}/{site_name}/overlays/{png_filename}"
+
             if not href:
-                entry["error"] = "No href in GroundOverlay"
+                # No remote URL - look for local file with same name as KML
+                source_png = kml.parent / png_filename
+                dest_png = overlays_dir / png_filename
+                
+                overlays_dir.mkdir(parents=True, exist_ok=True)
+                
+                if source_png.exists():
+                    shutil.copy2(source_png, dest_png)
+                    entry["image"] = image_rel
+                    entry["download_ok"] = True
+                    entry["error"] = None
+                    print(f"  ✅ Copied PNG: {png_filename}")
+                else:
+                    entry["image"] = image_rel
+                    entry["download_ok"] = False
+                    entry["error"] = f"Local file not found: {source_png}"
+                    print(f"  ⚠️  PNG not found: {source_png}")
                 manifest_overlays.append(entry)
                 continue
 
-            fname = safe_filename_from_url(href, f"overlay_{idx}.png")
-            dest = overlays_dir / fname
+            # Check if href is a URL or local file reference
+            if href.startswith("http://") or href.startswith("https://"):
+                dest = overlays_dir / png_filename
 
-            # CHANGE: overlays.image should have "potential/{site.name}/" prepended
-            # Keep the rest of the path the same as before ("overlays/<fname>").
-            image_rel = f"/{POTENTIAL_BASE}/{site_name}/overlays/{fname}"
+                if args.skip_downloads:
+                    entry["image"] = image_rel
+                    entry["download_ok"] = False
+                    entry["error"] = "Downloads skipped by --skip-downloads"
+                    manifest_overlays.append(entry)
+                    continue
 
-            if args.skip_downloads:
-                entry["image"] = image_rel
-                entry["download_ok"] = False
-                entry["error"] = "Downloads skipped by --skip-downloads"
-                manifest_overlays.append(entry)
-                continue
+                res = download(href, dest, timeout_s=args.timeout)
 
-            res = download(href, dest, timeout_s=args.timeout)
+                entry["http_status"] = res.http_status
+                entry["download_ok"] = res.ok
+                entry["error"] = res.error
 
-            entry["http_status"] = res.http_status
-            entry["download_ok"] = res.ok
-            entry["error"] = res.error
-
-            if res.ok:
-                entry["image"] = image_rel
-                print(f"  ✅ PNG: {fname}")
+                if res.ok:
+                    entry["image"] = image_rel
+                    print(f"  ✅ PNG: {png_filename}")
+                else:
+                    print(f"  ⚠️  PNG failed: {href} -> {res.error} (status={res.http_status})")
             else:
-                print(f"  ⚠️  PNG failed: {href} -> {res.error} (status={res.http_status})")
+                # Local file reference - look for PNG in same directory as KML
+                source_png = kml.parent / png_filename
+                dest_png = overlays_dir / png_filename
+                
+                overlays_dir.mkdir(parents=True, exist_ok=True)
+                
+                if source_png.exists():
+                    shutil.copy2(source_png, dest_png)
+                    entry["image"] = image_rel
+                    entry["download_ok"] = True
+                    entry["error"] = None
+                    print(f"  ✅ Copied PNG: {png_filename}")
+                else:
+                    entry["image"] = image_rel
+                    entry["download_ok"] = False
+                    entry["error"] = f"Local file not found: {source_png}"
+                    print(f"  ⚠️  PNG not found: {source_png}")
 
             manifest_overlays.append(entry)
 
-        # CHANGE: Add antenna_agl_m and antenna_agl_note after lat/lon with defaults
         manifest = {
             "site": {
                 "name": site_name,
                 "lat": info["lat"],
                 "lon": info["lon"],
-                "antenna_agl_m": 10.0,
+                "antenna_agl_m": info["antenna_agl_m"],
                 "antenna_agl_note": "",
                 "folder_name": info["folder_name"],
                 "placemark_name": info["placemark_name"],
@@ -290,8 +466,6 @@ def main() -> int:
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         print(f"  ✔ Wrote: {manifest_path}")
 
-        # CHANGE: Output manifest.json relative path to index.json
-        # Example: "potential/BERA/manifest.json"
         index_manifests.append(f"{POTENTIAL_BASE}/{site_name}/manifest.json")
 
     # Write index.json at output root

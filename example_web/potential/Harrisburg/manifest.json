@@ -1,0 +1,33 @@
+{
+  "site": {
+    "name": "Harrisburg",
+    "lat": 40.264444,
+    "lon": -76.883611,
+    "antenna_agl_m": 10.0,
+    "antenna_agl_note": "",
+    "folder_name": "Harrisburg",
+    "placemark_name": "Harrisburg TX",
+    "source_kml": "Harrisburg.kml"
+  },
+  "overlays": [
+    {
+      "name": "Harrisburg",
+      "source_url": "Harrisburg.png",
+      "bounds": [
+        [
+          39.366133,
+          -78.060844
+        ],
+        [
+          41.162755,
+          -75.706378
+        ]
+      ],
+      "rotation": null,
+      "image": "/potential/Harrisburg/overlays/Harrisburg.png",
+      "download_ok": true,
+      "http_status": null,
+      "error": null
+    }
+  ]
+}
