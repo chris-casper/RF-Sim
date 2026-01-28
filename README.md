@@ -1,4 +1,7 @@
 
+![RF-Sim Pic](rf-sim.png)
+
+
 `RF-sim` is a collection of scripts and LeafletJS to make a nice map that shows RF coverage. 
 
 Designed for Ubuntu, Debian or Armbian. You should be able to easily port to other OS. 
