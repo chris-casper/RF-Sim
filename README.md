@@ -177,7 +177,7 @@ Input file size is 2828, 2159
 ===============================================================================
 ```
 
-** KML to webapp**
+**KML to Webapp**
 ---
 
 Dump kml_2_leaflet.py in a folder with the KML's and PNG's.
