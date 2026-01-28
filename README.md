@@ -26,7 +26,7 @@ Download your areas, unzip, put HGT files into one folder.
 ```shell
 
 #	Install dependencies
-sudo apt install g++ cmake libbz2-dev gdal-bin python3-gdal libspdlog-dev zlib1g-dev splat zip dos2unix bc
+sudo apt install g++ cmake libbz2-dev gdal-bin python3-gdal libspdlog-dev zlib1g-dev splat zip dos2unix bc git
 
 #	Get code
 git clone https://github.com/W3AXL/Signal-Server.git
