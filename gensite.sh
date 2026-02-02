@@ -8,6 +8,8 @@
 #  v1	- 2026.01.26 - Initial
 #  v1.1	- 2026.01.27 - Added GDAL
 #  v1.2 - 2026.01.28 - 90m working, 30m borked
+#  v1.3 - 2026.01.30 - Separate SDF directories for 30m and 90m
+#  v1.4 - 2026.02.02 - Simplified 30m
 #
 #  # Make it executable. If using Windows, dos2unix is a good idea
 # sudo chmod +x gensite.sh
@@ -20,8 +22,17 @@
 # SETUP - Run these first
 #-------------------------------------------------------------------------------
 
+#   90m global 3-arc second DEM files
 #	https://www.viewfinderpanoramas.org/Coverage%20map%20viewfinderpanoramas_org3.htm
-#	Download your areas, unzip, put HGT files into one folder.
+#   OR
+#for lat in {38..43}; do for lon in {73..83}; do curl -fLO --retry 3 https://step.esa.int/auxdata/dem/SRTMGL3/N${lat}W$(printf "%03d" $lon).SRTMGL3.hgt.zip || true; done; done
+#	Download your areas, unzip, put HGT files into a 90m folder.
+
+#   30m global 1-arc second DEM files
+#for lat in {38..43}; do for lon in {73..83}; do curl -fLO --retry 3 https://step.esa.int/auxdata/dem/SRTMGL1/N${lat}W$(printf "%03d" $lon).SRTMGL1.hgt.zip || true; done; done
+#   replace lat and long to cover your area. Move files to a folder separate from the 90m.
+#   Beyond 30m isn't worthwhile unless you really really know what you're doing. At that point, LIDAR is what you're going to be working with and likely need high speed compute cluster
+
 
 #	Install dependencies
 #sudo apt install g++ cmake libbz2-dev gdal-bin python3-gdal libspdlog-dev zlib1g-dev splat zip dos2unix bc
@@ -37,12 +48,12 @@
 #make
 #	ignore warnings
 
-#	For 30m high-resolution data, this will take overnight.
+#	For 30m high-resolution data, this will take overnight. Change folder to where you put the HGT, and SDF_DIR_30M.
 #for file in Tile/*.hgt; do
 #    srtm2sdf-hd "$file"
 #done
 
-#	For 90m high-resolution data, this is faster and good enough for most scenarios. Still will take hours
+#	For 90m high-resolution data, this is faster and good enough for most scenarios. Still will take hours. Change folder to where you put the HGT, and SDF_DIR_90M.
 #for file in Tile/*.hgt; do
 #   srtm2sdf "$file"
 #done
@@ -53,26 +64,28 @@
 #cd /mnt/c/scripts/signalserver/data/SRTM1 && for f in *:*; do mv "$f" "${f//:/_}"; done
 
 
+
 #-------------------------------------------------------------------------------
 # CONFIGURATION - Edit these variables for your setup
 #-------------------------------------------------------------------------------
 
 # Site Information
-SITE_NAME="Example"				# Used for output filenames (no spaces)
+SITE_NAME="Harrisburg"				# Used for output filenames (no spaces)
 SITE_DESCRIPTION="RF Coverage Map"		# Description in KML file
 
 # Paths
 SIGNALSERVER_BIN="/mnt/c/scripts/signalserver/build/signalserver"		# Standard version for 1200 res and below
 SIGNALSERVER_HD_BIN="/mnt/c/scripts/signalserver/build/signalserverHD"	# HD version for 3600 res
-SDF_DIR="/mnt/c/scripts/signalserver/data/SRTM1"						# Both .sdf and -hd.sdf files should be here
+SDF_DIR_90M="/mnt/c/scripts/signalserver/data/90m"						# Standard .sdf files (90m SRTM3)
+SDF_DIR_30M="/mnt/c/scripts/signalserver/data/30m"						# HD -hd.sdf files (30m SRTM1)
 OUTPUT_DIR="/mnt/c/scripts/signalserver/sites"		 					# Where to save output files
 COLOR_FILE="/mnt/c/scripts/signalserver/M4_dBm.dcf"						# Path to color palette file (.dcf/.scf), leave empty for default
 #COLOR_FILE=""															# Blank color file for testing
 
 
 # Transmitter Location
-TX_LAT=40.269789                       # Latitude (decimal degrees, -70 to +70)
-TX_LON=-76.875613                      # Longitude (decimal degrees, -180 to +180)
+TX_LAT=40.264444                       # Latitude (decimal degrees, -70 to +70)
+TX_LON=-76.883611                      # Longitude (decimal degrees, -180 to +180)
 # I had an intrusive though, longtitude is 360 degrees because that's what ancient Babylonians used. Yes, it's arbitrarily. 
 # Kinda sorta. It's easy to divide and there's around 360 days in a year.
 
@@ -93,7 +106,7 @@ RX_GAIN=""                             # Receiver gain in dBd (optional, for PPA
 
 # Coverage Area
 RADIUS=100                             # Coverage radius (km if USE_METRIC=true)
-S=1200                        # Pixels per tile: 300, 600, 1200 (90m), or 3600 (30m HD)
+RESOLUTION=3600                        # Pixels per tile: 300, 600, 1200 (90m), or 3600 (30m HD)
 
 # Propagation Model
 # 1=ITM, 2=LOS, 3=Hata, 4=ECC33, 5=SUI, 6=COST-Hata, 
@@ -128,9 +141,16 @@ CREATE_KMZ=true                        # Create compressed KMZ (false = just KML
 KEEP_PPM=true							# Keep the original PPM file
 DEBUG=true                            # Enable verbose debug output
 
+
+
 #-------------------------------------------------------------------------------
 # END CONFIGURATION - No need to edit below this line
 #-------------------------------------------------------------------------------
+
+#-------------------------------------------------------------------------------
+# START OF CODE - No need to edit below this line
+#-------------------------------------------------------------------------------
+
 
 # Colors for output
 RED='\033[0;31m'
@@ -152,14 +172,18 @@ error() {
     exit 1
 }
 
-# Determine which binary to use based on resolution
+# Determine which binary and SDF directory to use based on resolution
 select_binary() {
     if [ "$RESOLUTION" -eq 3600 ]; then
         ACTIVE_BIN="$SIGNALSERVER_HD_BIN"
+        ACTIVE_SDF_DIR="$SDF_DIR_30M"
         info "Using HD binary for 3600 resolution (30m SRTM1 data)"
+        info "Using SDF directory: $ACTIVE_SDF_DIR"
     else
         ACTIVE_BIN="$SIGNALSERVER_BIN"
+        ACTIVE_SDF_DIR="$SDF_DIR_90M"
         info "Using standard binary for $RESOLUTION resolution (90m SRTM3 data)"
+        info "Using SDF directory: $ACTIVE_SDF_DIR"
     fi
 }
 
@@ -237,7 +261,7 @@ run_signalserver() {
     
     # Redid for SD vs HD. This part was not fun. Probably where bugs will be found. 
     cmd_args+=("$ACTIVE_BIN")
-    cmd_args+=(-sdf "$SDF_DIR")
+    cmd_args+=(-sdf "$ACTIVE_SDF_DIR")
     [ -n "$COLOR_FILE" ] && cmd_args+=(-color "$COLOR_FILE")
     cmd_args+=(-lat "$TX_LAT")
     cmd_args+=(-lon "$TX_LON")
@@ -269,9 +293,12 @@ run_signalserver() {
     [ "$TERRAIN_BACKGROUND" = true ] && cmd_args+=(-t)
     [ "$DEBUG" = true ] && cmd_args+=(-dbg)
     cmd_args+=(-o "$OUTPUT_DIR/$SITE_NAME")
-    
+	
+	# spaced out for easier copy/paste
     if [ "$DEBUG" = true ]; then
+        echo ""
         echo "Command: ${cmd_args[*]}"
+        echo ""
     fi
     
     # Execute the command directly
@@ -300,6 +327,7 @@ convert_to_png() {
     fi
     
     # Make white pixels transparent using Python with GDAL
+	# Cheat with python because I could copy/paste an example that worked
     python3 << EOF
 from osgeo import gdal
 import numpy as np
@@ -354,7 +382,7 @@ EOF
     info "PNG created: $OUTPUT_DIR/$SITE_NAME.png"
 }
 
-# Create KML file. Need to modify the script that converts KML to webapp
+# Create KML file. Update - Modified the KML to webapp script. 
 create_kml() {
     info "Creating KML file..."
     
