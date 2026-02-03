@@ -34,7 +34,7 @@ for lat in {38..43}; do for lon in {73..83}; do curl -fLO --retry 3 https://step
 
 Remember, you will need to convert using srtm2sdf-hd or srtm2sdf. See below.
 
-These are hosted by the the [ESA Scientific Toolbox Exploitation Platform](https://step.esa.int/main/). They are sourced from the [NASA / USGS Shuttle Radar Topography Mission](https://en.wikipedia.org/wiki/Shuttle_Radar_Topography_Mission) dataset, collected by Space Shuttle Endeavour in February 2000 using interferometric synthetic aperture radar (InSAR). It mapped 80% of the land surfaces, and was the first near global dataset for terrain and elevation. 
+These are hosted by the the [ESA Scientific Toolbox Exploitation Platform](https://step.esa.int/main/). They are sourced from the [NASA / USGS Shuttle Radar Topography Mission](https://en.wikipedia.org/wiki/Shuttle_Radar_Topography_Mission) dataset, collected by Space Shuttle Endeavour in February 2000 using interferometric synthetic aperture radar (InSAR). It mapped 80% of the land surfaces, and was the first near global dataset for terrain and elevation. The canister, mast, and antenna from that mission are now on display at the Steven F. Udvar-Hazy Center in Chantilly, Virginia. I'll take photos next time I'm down there. 
 
 Copernicus DEM is another option if you want alternative dataset. But it's stored in GeoTIFF DEM tiles. You can use it but would have to do an additional step of converting. You won't get significantly more accuracy, but it is slightly more accurate for some niches. 
 
