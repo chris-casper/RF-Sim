@@ -60,7 +60,7 @@
 
 # Move the sdf files to whatever folder you put as SDF_DIR
 
-#	If you need to switch : to _ , use this 
+#	If you need to switch : to _ , use this. Something about python causes the issue?
 #cd /mnt/c/scripts/signalserver/data/SRTM1 && for f in *:*; do mv "$f" "${f//:/_}"; done
 
 
@@ -70,7 +70,7 @@
 #-------------------------------------------------------------------------------
 
 # Site Information
-SITE_NAME="Harrisburg"				# Used for output filenames (no spaces)
+SITE_NAME="BERA-TowersRX"				# Used for output filenames (no spaces)
 SITE_DESCRIPTION="RF Coverage Map"		# Description in KML file
 
 # Paths
@@ -84,20 +84,22 @@ COLOR_FILE="/mnt/c/scripts/signalserver/M4_dBm.dcf"						# Path to color palette
 
 
 # Transmitter Location
-TX_LAT=40.264444                       # Latitude (decimal degrees, -70 to +70)
-TX_LON=-76.883611                      # Longitude (decimal degrees, -180 to +180)
+TX_LAT=41.203586                      # Latitude (decimal degrees, -70 to +70)
+TX_LON=−76.964072                     # Longitude (decimal degrees, -180 to +180)
 # I had an intrusive though, longtitude is 360 degrees because that's what ancient Babylonians used. Yes, it's arbitrarily. 
 # Kinda sorta. It's easy to divide and there's around 360 days in a year.
 
 # Transmitter Settings
-TX_HEIGHT=10                           # Transmitter height above ground (meters if USE_METRIC=true)
+TX_HEIGHT=5                           # Transmitter height above ground (meters if USE_METRIC=true)
 TX_FREQ=906.875                        # Frequency in MHz (20 MHz to 100 GHz)
 #TX_ERP=4                               # Effective Radiated Power in Watts
-# Transmitter Power, cheating a bit.
+# Transmitter Power, cheating a bit. Update later? 
 TX_POWER_WATTS=1                       # Transmitter output power in watts
 TX_ANTENNA_DBI=6                       # Antenna gain in dBi
-TX_ERP=$(echo "scale=2; $TX_POWER_WATTS * e($TX_ANTENNA_DBI * l(10) / 10)" | bc -l)
 
+# Corrections and Calculations
+TX_ERP=$(echo "scale=2; $TX_POWER_WATTS * e($TX_ANTENNA_DBI * l(10) / 10)" | bc -l)
+TX_LON="${TX_LON//−/-}"
 
 # Receiver Settings
 RX_HEIGHT=2                            # Receiver height above ground
@@ -321,7 +323,8 @@ convert_to_png() {
     
     # Convert PPM to PNG using gdal_translate
     gdal_translate -of PNG "$OUTPUT_DIR/$SITE_NAME.ppm" "$OUTPUT_DIR/$SITE_NAME.png"
-    
+	# SPLAT! recommends OptiPNG. This seems to work, so leave alone?
+	
     if [ $? -ne 0 ]; then
         error "Failed to convert PPM to PNG"
     fi
