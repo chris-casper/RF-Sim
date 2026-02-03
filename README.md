@@ -7,7 +7,8 @@ The Susquehanna Valley Mesh `RF-sim` is a collection of scripts and LeafletJS to
 Designed for Ubuntu, Debian or Armbian. You should be able to easily port to other OS. 
 
 WARNING: This is still very much in beta state. Do not use without some Linux knowledge/experience.
-30m is broken, 90m works great. Python script works, web app works. You can view live version at [https://susme.sh](https://susme.sh)
+30m and 90m seems to be working. Python script works, web app works. 
+You can view live version at [https://susme.sh](https://susme.sh)
 
 **Usage**
 ---
@@ -18,13 +19,52 @@ dos2unix gensite.sh
 ./gensite.sh
 ```
 
+**Terrain Tiles**
+---
+
+These can download the HGT terrain tiles to cover the latitude and longtitudes you'll want to model. Adjust them by hand. 
+30m tiles will take a very long time to process. Think an entire day or more. 
+
+```shell
+#   90m global 3-arc second DEM files
+for lat in {38..43}; do for lon in {73..83}; do curl -fLO --retry 3 https://step.esa.int/auxdata/dem/SRTMGL3/N${lat}W$(printf "%03d" $lon).SRTMGL3.hgt.zip || true; done; done
+#   30m global 1-arc second DEM files
+for lat in {38..43}; do for lon in {73..83}; do curl -fLO --retry 3 https://step.esa.int/auxdata/dem/SRTMGL1/N${lat}W$(printf "%03d" $lon).SRTMGL1.hgt.zip || true; done; done
+```
+
+Remember, you will need to convert using srtm2sdf-hd or srtm2sdf. See below.
+
+These are hosted by the the [ESA Scientific Toolbox Exploitation Platform](https://step.esa.int/main/). They are sourced from the [NASA / USGS Shuttle Radar Topography Mission](https://en.wikipedia.org/wiki/Shuttle_Radar_Topography_Mission) dataset, collected by Space Shuttle Endeavour in February 2000 using interferometric synthetic aperture radar (InSAR). It mapped 80% of the land surfaces, and was the first near global dataset for terrain and elevation. 
+
+Copernicus DEM is another option if you want alternative dataset. But it's stored in GeoTIFF DEM tiles. You can use it but would have to do an additional step of converting. You won't get significantly more accuracy, but it is slightly more accurate for some niches. 
+
+```shell
+#90m
+for lat in {38..43}; do for lon in {73..83}; do
+  curl -fLO --retry 3 \
+  "https://copernicus-dem-90m.s3.amazonaws.com/Copernicus_DSM_COG_30_N${lat}_00_W$(printf "%03d" $lon)_00_DEM.tif" || true
+done; done
+
+#30m
+for lat in {38..43}; do for lon in {73..83}; do
+  curl -fLO --retry 3 \
+  "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N${lat}_00_W$(printf "%03d" $lon)_00_DEM.tif" || true
+done; done
+
+# converting to HGT
+for f in Copernicus_DSM_COG_*_DEM.tif; do
+  lat=$(echo "$f" | sed -n 's/.*_N\([0-9]\+\)_00_.*/\1/p')
+  lon=$(echo "$f" | sed -n 's/.*_W\([0-9]\+\)_00_.*/\1/p')
+  gdal_translate -of SRTMHGT "$f" "N${lat}W${lon}.hgt"
+done
+```
+
+Technically next step is 1m LIDAR DEM's from USGS 3DEP 1m DEM (US Only), but you're not going to have a fun time compiling them. Not recommended unless trying to do for a specific city at a time. If there is interest, I'll write a guide for that. You're exponenetially increasing processing requirements for minor gain unless doing a small area or hyper specific RF target.
+
 
 **Installation Options**
 ---
 
-https://www.viewfinderpanoramas.org/Coverage%20map%20viewfinderpanoramas_org3.htm
-
-Download your areas, unzip, put HGT files into one folder.
 
 ```shell
 
@@ -53,9 +93,9 @@ for file in /Path/to/Folder/*.hgt; do
    srtm2sdf "$file"
 done
 
-# Move the sdf files to whatever folder you put as SDF_DIR
+#   Move the sdf files to whatever folder you put as SDF_DIR
 
-#	If you need to switch : to _ , use this 
+#	You need to switch : to _ , use this: 
 #cd /mnt/c/scripts/signalserver/data/SRTM1 && for f in *:*; do mv "$f" "${f//:/_}"; done
 ```
 
